@@ -3,7 +3,15 @@
 // The two things that make this different from a fetch loop in a no-code node:
 // it refuses to report success on a partial read, and it writes down what it did.
 
-export async function readAll({ url, params = {}, auth, cursorParam = 'cursor', cursorField = 'next_cursor', dataField = 'data', pageSize = 250, maxRetries = 5, receipts, fetchImpl = fetch }) {
+/**
+ * Read a dotted path out of a response body. Real APIs nest their cursors:
+ * HubSpot returns `paging.next.after`, Salesforce `nextRecordsUrl`, Meta
+ * `paging.cursors.after`. Supporting a path costs one function and removes the
+ * need for a bespoke adapter per platform.
+ */
+const at = (obj, path) => (path ? String(path).split('.').reduce((o, k) => (o == null ? undefined : o[k]), obj) : undefined);
+
+export async function readAll({ url, params = {}, auth, cursorParam = 'cursor', cursorField = 'next_cursor', dataField = 'data', pageSize = 250, pageSizeParam = 'limit', totalField = 'total_hint', maxRetries = 5, receipts, fetchImpl = fetch }) {
   const rows = [];
   let cursor = null;
   let pages = 0;
@@ -11,7 +19,7 @@ export async function readAll({ url, params = {}, auth, cursorParam = 'cursor', 
   const pageBoundaries = [];
 
   for (;;) {
-    const q = new URLSearchParams({ ...params, limit: String(pageSize) });
+    const q = new URLSearchParams({ ...params, [pageSizeParam]: String(pageSize) });
     if (cursor) q.set(cursorParam, cursor);
     const target = `${url}?${q}`;
 
@@ -39,18 +47,19 @@ export async function readAll({ url, params = {}, auth, cursorParam = 'cursor', 
 
     if (!res.ok) throw new Error(`${res.status} from ${target}`);
     const body = await res.json();
-    const batch = body[dataField] ?? [];
+    const batch = at(body, dataField) ?? [];
     pages++;
     pageBoundaries.push({ page: pages, cursor: cursor ?? '0', received: batch.length });
     rows.push(...batch);
 
-    const next = body[cursorField];
+    const next = at(body, cursorField);
     if (!next) {
       // A total hint is a cheap end-to-end check the platform gives away for free.
-      if (Number.isFinite(body.total_hint) && body.total_hint !== rows.length) {
-        receipts?.note('count_mismatch_vs_hint', { expected: body.total_hint, received: rows.length });
+      const hint = at(body, totalField);
+      if (Number.isFinite(hint) && hint !== rows.length) {
+        receipts?.note('count_mismatch_vs_hint', { expected: hint, received: rows.length });
       }
-      return { rows, pages, retriesUsed, pageBoundaries, totalHint: body.total_hint ?? null };
+      return { rows, pages, retriesUsed, pageBoundaries, totalHint: hint ?? null };
     }
     cursor = next;
     if (pages > 10000) throw new Error('pagination did not terminate');

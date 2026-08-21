@@ -264,3 +264,35 @@ test('both sinks share one merge implementation', () => {
   const rows = mergeRows(truth, [{ ...truth[0], spend: 5 }], { keyColumns });
   assert.equal(rows.length, 3, 'a shorter incoming set must not shrink the sheet');
 });
+
+test('a nested cursor and data path works, e.g. HubSpot paging.next.after', async () => {
+  // HubSpot: { results: [...], paging: { next: { after: "..." } } }
+  const pages = {
+    0: { results: [{ id: 'a' }], paging: { next: { after: '1' } } },
+    1: { results: [{ id: 'b' }], paging: {} },
+  };
+  const fetchImpl = async (url) => {
+    const after = new URL(url).searchParams.get('after') || '0';
+    return { status: 200, ok: true, headers: { get: () => null }, json: async () => pages[Number(after)] };
+  };
+  const out = await readAll({
+    url: 'http://x/crm/v3/objects/deals',
+    dataField: 'results',
+    cursorField: 'paging.next.after',
+    cursorParam: 'after',
+    pageSizeParam: 'limit',
+    fetchImpl,
+  });
+  assert.deepEqual(out.rows.map((r) => r.id), ['a', 'b']);
+  assert.equal(out.pages, 2);
+});
+
+test('the page-size parameter name is configurable', async () => {
+  let seen = null;
+  const fetchImpl = async (url) => {
+    seen = new URL(url).searchParams.get('per_page');
+    return { status: 200, ok: true, headers: { get: () => null }, json: async () => ({ data: [] }) };
+  };
+  await readAll({ url: 'http://x/v1', pageSize: 77, pageSizeParam: 'per_page', fetchImpl });
+  assert.equal(seen, '77');
+});
