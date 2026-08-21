@@ -141,15 +141,37 @@ syncproof report jobs/ads.json --out report.html
 
 ### Alongside n8n, Make or Zapier
 
-This is not a replacement for a workflow platform, and it does not ask you to move
-anything. Keep the scenario you have; add a verification step to it:
+This does not replace your workflow platform and does not ask you to move anything.
+Keep the scenario you have; put a verification step in front of the decisions it feeds.
 
-- `syncproof simulate` serves a reporting API a scenario can be pointed at, so the
-  scenario's own output can be checked against known data.
-- `syncproof verify` returns a non-zero exit code and a JSON-shaped report, which is
-  enough for an n8n Execute Command node or a scheduled CI job to gate on.
-- The receipts file is append-only JSONL — trivially ingestible by whatever already
-  watches your logs.
+**Self-hosted n8n** — an Execute Command node:
+
+```bash
+syncproof verify jobs/ads.json --json     # exit 1 on failure, JSON summary on stdout
+```
+
+**n8n Cloud, Make, Zapier** — they cannot run shell commands, so run the HTTP surface
+next to your data instead:
+
+```bash
+syncproof serve --port 8790 --token "$SYNCPROOF_TOKEN"
+```
+
+| Route | Meaning |
+|---|---|
+| `POST /verify?job=…` | **200** the sheet matches the export · **422** it does not |
+| `POST /sync?job=…&approve=true` | perform the sync; without `approve` it returns the plan and writes nothing |
+| `GET /healthz` | liveness, and whether a token is required |
+
+A failed check is **422, not 200 with a flag in the body** — no-code platforms branch on
+status codes, and a flag in a body gets ignored. An ignored check is not a check.
+
+In an n8n HTTP Request node, set **Never Error** and **Full Response** so a 422 arrives
+at your IF node as data instead of killing the run. Two importable workflows are in
+[`n8n/`](n8n/): one that syncs then verifies, and one that only verifies — for a sheet
+some other pipeline already builds.
+
+The receipts file is append-only JSONL, so whatever already watches your logs can read it.
 
 ---
 
@@ -198,7 +220,7 @@ catch are the point.
 ## Install and test
 
 ```bash
-npm test        # 28 tests, standard library only, no network
+npm test        # 35 tests, standard library only, no network
 ```
 
 Node 20+. No dependencies.

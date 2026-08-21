@@ -13,9 +13,15 @@ syncproof — sync a reporting API into a sheet, then prove the sheet matches it
       Read the source, print exactly what would change, and write only with
       --approve. Without it nothing is modified.
 
-  syncproof verify <job.json> [--as-of DATE]
+  syncproof verify <job.json> [--as-of DATE] [--json]
       Compare the sheet against the client's own export. Exit code 1 if any
-      check fails, so it can gate a scheduled run.
+      check fails, so it can gate a scheduled run. --json prints a machine
+      summary for an n8n Execute Command node.
+
+  syncproof serve [--port 8790] [--token X] [--job jobs/x.json]
+      HTTP surface for platforms that cannot run shell commands (n8n Cloud,
+      Make, Zapier): POST /verify returns 200 when the sheet matches and
+      422 when it does not, so a scenario can branch on the status code.
 
   syncproof report <job.json> [--out report.html]
       Write the diff report.

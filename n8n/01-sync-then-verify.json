@@ -1,0 +1,106 @@
+{
+  "name": "syncproof — sync, then verify before anyone trusts it",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "days", "triggerAtHour": 6, "triggerAtMinute": 20 }] }
+      },
+      "id": "a1000000-0000-4000-8000-000000000001",
+      "name": "Every morning 06:20",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-320, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:8790/sync",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "job", "value": "jobs/ads-to-sheet.json" },
+            { "name": "approve", "value": "true" }
+          ]
+        },
+        "options": { "response": { "response": { "fullResponse": true, "neverError": true } } }
+      },
+      "id": "a1000000-0000-4000-8000-000000000002",
+      "name": "Sync into the sheet",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-80, 0],
+      "notes": "approve=true is the write. Drop it and the response tells you what would change, without touching the sheet."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:8790/verify",
+        "sendQuery": true,
+        "queryParameters": { "parameters": [{ "name": "job", "value": "jobs/ads-to-sheet.json" }] },
+        "options": { "response": { "response": { "fullResponse": true, "neverError": true } } }
+      },
+      "id": "a1000000-0000-4000-8000-000000000003",
+      "name": "Verify against the export",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [160, 0],
+      "notes": "neverError + fullResponse are required: a 422 must reach the IF node as data, not kill the run."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose", "version": 2 },
+          "conditions": [
+            {
+              "id": "cond-trustworthy",
+              "leftValue": "={{ $json.statusCode }}",
+              "rightValue": 200,
+              "operator": { "type": "number", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "a1000000-0000-4000-8000-000000000004",
+      "name": "Trustworthy?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [400, 0],
+      "notes": "200 = the sheet matches the platform export. 422 = it does not."
+    },
+    {
+      "parameters": {},
+      "id": "a1000000-0000-4000-8000-000000000005",
+      "name": "Safe to report from",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [640, -100]
+    },
+    {
+      "parameters": {
+        "errorMessage": "={{ 'Sheet does not match the export: ' + $json.body.checks.filter(c => c.status === 'fail').map(c => c.headline).join(' | ') }}"
+      },
+      "id": "a1000000-0000-4000-8000-000000000006",
+      "name": "Stop: do not report from this",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [640, 100],
+      "notes": "Failing loudly is the point. A silently wrong dashboard is worse than a broken run."
+    }
+  ],
+  "connections": {
+    "Every morning 06:20": { "main": [[{ "node": "Sync into the sheet", "type": "main", "index": 0 }]] },
+    "Sync into the sheet": { "main": [[{ "node": "Verify against the export", "type": "main", "index": 0 }]] },
+    "Verify against the export": { "main": [[{ "node": "Trustworthy?", "type": "main", "index": 0 }]] },
+    "Trustworthy?": {
+      "main": [
+        [{ "node": "Safe to report from", "type": "main", "index": 0 }],
+        [{ "node": "Stop: do not report from this", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {}
+}
