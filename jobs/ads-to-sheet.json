@@ -1,0 +1,36 @@
+{
+  "name": "Ad-level performance → reporting sheet",
+  "receipts": "out/receipts.jsonl",
+
+  "source": {
+    "url": "http://127.0.0.1:8787/v1/ads",
+    "params": { "since": "2026-07-01", "until": "2026-08-14" },
+    "cursorParam": "cursor",
+    "cursorField": "next_cursor",
+    "dataField": "data",
+    "pageSize": 250,
+    "maxRetries": 5,
+
+    "//transforms": "Uncomment to fix the micros fault. Leaving it out is how the aggregate check earns its keep.",
+    "transforms": {}
+  },
+
+  "sink": {
+    "dir": "out/sheet",
+    "keyColumns": ["date", "ad_name"],
+    "columns": ["date", "ad_name", "impressions", "three_second_plays", "link_clicks", "purchases", "spend", "revenue"]
+  },
+
+  "truth": { "csv": "out/platform-export.csv" },
+
+  "verify": {
+    "keyColumns": ["date", "ad_name"],
+    "metrics": ["impressions", "three_second_plays", "link_clicks", "purchases", "spend", "revenue"],
+    "tolerancePct": 0.5,
+    "dateColumn": "date",
+    "joinColumn": "ad_name",
+    "entityCsv": "out/roadmap-ads.csv",
+    "entityColumn": "ad_name",
+    "settledAfterDays": 3
+  }
+}

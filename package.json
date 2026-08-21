@@ -1,0 +1,14 @@
+{
+  "name": "syncproof",
+  "version": "0.1.0",
+  "description": "Sync a SaaS API into a spreadsheet, then prove the numbers match the source. Append-only history, dry-run writes, audited receipts.",
+  "type": "module",
+  "bin": { "syncproof": "src/cli.js" },
+  "scripts": {
+    "sim": "node src/cli.js simulate --port 8787",
+    "demo": "node src/cli.js demo",
+    "test": "node --test \"test/*.test.js\""
+  },
+  "license": "MIT",
+  "engines": { "node": ">=20" }
+}

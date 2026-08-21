@@ -1,0 +1,30 @@
+syncproof — sync a reporting API into a sheet, then prove the sheet matches it.
+
+  syncproof demo [--faults a,b] [--clean]
+      End to end against the bundled simulator: two runs a day apart, then the
+      full check suite and an HTML report. --clean turns every fault off, so the
+      same command shows the suite passing.
+
+  syncproof simulate [--port 8787] [--faults a,b] [--as-of 2026-08-14]
+      Serve the stand-in reporting API, so an n8n or Make scenario can be pointed
+      at it and its output checked the same way.
+
+  syncproof sync <job.json> [--approve] [--snapshot LABEL] [--as-of DATE]
+      Read the source, print exactly what would change, and write only with
+      --approve. Without it nothing is modified.
+
+  syncproof verify <job.json> [--as-of DATE]
+      Compare the sheet against the client's own export. Exit code 1 if any
+      check fails, so it can gate a scheduled run.
+
+  syncproof report <job.json> [--out report.html]
+      Write the diff report.
+
+Faults available to the simulator:
+  micros          spend returned in micros while the export is in currency units
+  cursor_drift    one row silently skipped at each page boundary
+  rate_limit      every 4th request returns 429 with Retry-After
+  tz_shift        reporting day starts at 07:00 UTC, rows land on the wrong date
+  rename          an ad is renamed mid-period, breaking the join on ad name
+  dupe_page       a retried page redelivers rows already written
+  window_change   the attribution window changes, restating settled days
