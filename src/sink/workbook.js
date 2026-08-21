@@ -1,5 +1,6 @@
-// A local stand-in for the destination spreadsheet, with the same contract the
-// Google Sheets sink will implement:
+// A local stand-in for the destination spreadsheet. Same contract as the Google
+// Sheets sink, and the same merge rules — both delegate to merge.js so they cannot
+// diverge:
 //
 //   - upsert by primary key, never truncate
 //   - one immutable snapshot per run, so yesterday's numbers can still be produced
@@ -9,8 +10,9 @@
 
 import { mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { planMerge, mergeRows, keyOf, KEY_SEP } from './merge.js';
 
-export const KEY_SEP = '|';
+export { KEY_SEP };
 
 const csvEscape = (v) => (/[",\n]/.test(String(v ?? '')) ? `"${String(v).replace(/"/g, '""')}"` : String(v ?? ''));
 
@@ -45,7 +47,7 @@ function splitCsvLine(line) {
 }
 
 export class LocalWorkbook {
-  constructor(dir, { columns, keyColumns, mode = 'upsert', keepDays = null, dateColumn = 'date' }) {
+  constructor({ dir, columns, keyColumns, mode = 'upsert', keepDays = null, dateColumn = 'date' }) {
     this.dir = dir;
     this.columns = columns;
     this.keyColumns = keyColumns;
@@ -56,77 +58,35 @@ export class LocalWorkbook {
   }
 
   get currentPath() { return join(this.dir, 'current.csv'); }
+  get url() { return this.currentPath; }
 
-  // A visible separator: receipts and diff reports are read by people.
-  key(row) { return this.keyColumns.map((c) => row[c]).join(KEY_SEP); }
+  key(row) { return keyOf(row, this.keyColumns); }
 
   readCurrent() {
     if (!existsSync(this.currentPath)) return [];
     return fromCsv(readFileSync(this.currentPath, 'utf8'));
   }
 
-  /**
-   * Merge incoming rows into the sheet. Returns a plan describing exactly what
-   * would change, so it can be shown to a human before anything is written.
-   */
   plan(incoming) {
-    const existing = new Map(this.readCurrent().map((r) => [this.key(r), r]));
-    const added = [], revised = [], unchanged = [];
-    for (const row of incoming) {
-      const k = this.key(row);
-      const prev = existing.get(k);
-      if (!prev) { added.push(row); continue; }
-      // Only the changed cells go into the plan. A receipt nobody can read is
-      // the same as no receipt.
-      const changes = this.columns
-        .filter((c) => String(prev[c] ?? '') !== String(row[c] ?? ''))
-        .map((c) => ({ column: c, from: prev[c], to: row[c] }));
-      if (changes.length) revised.push({ key: k, changes });
-      else unchanged.push(row);
-    }
-    const incomingKeys = new Set(incoming.map((r) => this.key(r)));
-    const absent = [...existing.keys()].filter((k) => !incomingKeys.has(k));
-    return {
-      added: added.length, revised: revised.length, unchanged: unchanged.length,
-      absentFromSource: absent.length,
-      revisions: revised.slice(0, 25),
-      // Rows the source stopped returning are kept. Deletion is never implicit.
-      retained: absent.length,
-    };
+    return planMerge(this.readCurrent(), incoming, { columns: this.columns, keyColumns: this.keyColumns });
   }
 
-  commit(incoming, { snapshotLabel }) {
-    let rows;
-    if (this.mode === 'append') {
-      // What a spreadsheet built from an "add row" automation actually does. Kept
-      // as a switch so the difference can be shown rather than asserted.
-      rows = [...this.readCurrent(), ...incoming];
-    } else {
-      const merged = new Map(this.readCurrent().map((r) => [this.key(r), r]));
-      for (const row of incoming) {
-        const k = this.key(row);
-        merged.set(k, { ...(merged.get(k) || {}), ...row });
-      }
-      rows = [...merged.values()].sort((a, b) => this.key(a).localeCompare(this.key(b)));
-    }
-    if (this.keepDays) {
-      // "No rolling 30-day windows that wipe older rows." This branch is the
-      // behaviour being warned about, kept so the check can be seen catching it.
-      const dates = [...new Set(rows.map((r) => r[this.dateColumn]))].sort();
-      const keep = new Set(dates.slice(-this.keepDays));
-      rows = rows.filter((r) => keep.has(r[this.dateColumn]));
-    }
+  commit(incoming, { snapshotLabel } = {}) {
+    const rows = mergeRows(this.readCurrent(), incoming, this);
     const csv = toCsv(rows, this.columns);
     writeFileSync(this.currentPath, csv, 'utf8');
-    if (snapshotLabel) {
-      writeFileSync(join(this.dir, 'snapshots', `${snapshotLabel}.csv`), csv, 'utf8');
-    }
-    return { rows: rows.length };
+    if (snapshotLabel) writeFileSync(join(this.dir, 'snapshots', `${snapshotLabel}.csv`), csv, 'utf8');
+    return { rows: rows.length, url: this.currentPath };
   }
 
-  snapshots() {
+  snapshotLabels() {
     const dir = join(this.dir, 'snapshots');
     if (!existsSync(dir)) return [];
-    return readdirSync(dir).filter((f) => f.endsWith('.csv')).sort();
+    return readdirSync(dir).filter((f) => f.endsWith('.csv')).map((f) => f.replace(/\.csv$/, '')).sort();
+  }
+
+  readSnapshot(label) {
+    const p = join(this.dir, 'snapshots', `${label}.csv`);
+    return existsSync(p) ? fromCsv(readFileSync(p, 'utf8')) : [];
   }
 }

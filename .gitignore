@@ -3,3 +3,6 @@ out/
 *.log
 .env
 .env.local
+.secrets/
+*service-account*.json
+*.local.json

@@ -1,0 +1,38 @@
+{
+  "name": "Ad-level performance → Google Sheet (verified)",
+  "receipts": "out/receipts-sheets.jsonl",
+
+  "source": {
+    "url": "http://127.0.0.1:8811/v1/ads",
+    "params": { "since": "2026-07-01", "until": "2026-08-14" },
+    "cursorParam": "cursor",
+    "cursorField": "next_cursor",
+    "dataField": "data",
+    "pageSize": 250,
+    "transforms": {}
+  },
+
+  "sink": {
+    "type": "sheets",
+    "//credentialsPath": "Or set SYNCPROOF_GOOGLE_CREDENTIALS. Share the sheet with the service account address as an Editor.",
+    "credentialsPath": ".secrets/google-service-account.json",
+    "spreadsheetId": "PUT_YOUR_SPREADSHEET_ID_HERE",
+    "tab": "current",
+    "snapshotPrefix": "snapshot ",
+    "keyColumns": ["date", "ad_name"],
+    "columns": ["date", "ad_name", "impressions", "three_second_plays", "link_clicks", "purchases", "spend", "revenue"]
+  },
+
+  "truth": { "csv": "out/platform-export.csv" },
+
+  "verify": {
+    "keyColumns": ["date", "ad_name"],
+    "metrics": ["impressions", "three_second_plays", "link_clicks", "purchases", "spend", "revenue"],
+    "tolerancePct": 0.5,
+    "dateColumn": "date",
+    "joinColumn": "ad_name",
+    "entityCsv": "out/roadmap-ads.csv",
+    "entityColumn": "ad_name",
+    "settledAfterDays": 3
+  }
+}

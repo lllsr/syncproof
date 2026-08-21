@@ -12,7 +12,9 @@ import { dirname, join, resolve } from 'node:path';
 import { createSimulator, serve, FAULTS } from './sim/server.js';
 import { buildLedger, applyRestatement, exportRows, toCsv as ledgerCsv, EXPORT_COLUMNS } from './sim/ledger.js';
 import { readAll, normalise } from './source/api.js';
-import { LocalWorkbook, fromCsv } from './sink/workbook.js';
+import { fromCsv } from './sink/workbook.js';
+import { openSink } from './sink/index.js';
+import { createSpreadsheet } from './sink/sheets.js';
 import { Receipts, gate } from './receipts.js';
 import { runChecks } from './verify/checks.js';
 import { renderReport } from './verify/report.js';
@@ -54,36 +56,33 @@ async function doSync(job, { approve, snapshotLabel, asOf }) {
   });
 
   const rows = normalise(read.rows, job.source.transforms);
-  const wb = new LocalWorkbook(rel(job, job.sink.dir), job.sink);
-  const plan = wb.plan(rows);
-  receipts.note('write_planned', plan);
+  const sink = openSink(job.sink);
+  const plan = await sink.plan(rows);
+  receipts.note('write_planned', { destination: sink.url, ...plan });
 
   const g = gate({ approved: !!approve, receipts, action: 'upsert', plan });
   if (!g.proceed) {
-    return { plan, written: false, reason: g.reason, receipts, read };
+    return { plan, written: false, reason: g.reason, receipts, read, sink };
   }
-  const res = wb.commit(rows, { snapshotLabel });
+  const res = await sink.commit(rows, { snapshotLabel });
   receipts.note('write_committed', { ...res, snapshot: snapshotLabel });
-  return { plan, written: true, rows: res.rows, receipts, read };
+  return { plan, written: true, rows: res.rows, receipts, read, sink, url: res.url };
 }
 
 // ---------------------------------------------------------------- verify
 
-function doVerify(job, { asOf } = {}) {
-  const wb = new LocalWorkbook(rel(job, job.sink.dir), job.sink);
-  const sheet = wb.readCurrent();
+async function doVerify(job, { asOf } = {}) {
+  const sink = openSink(job.sink);
+  const sheet = await sink.readCurrent();
   const truthPath = rel(job, job.truth.csv);
   if (!existsSync(truthPath)) die(`source-of-truth export not found: ${truthPath}`);
   const truth = fromCsv(readFileSync(truthPath, 'utf8'));
 
-  const snaps = wb.snapshots();
-  const priorFile = snaps.length > 1 ? snaps[snaps.length - 2] : null;
-  const prior = priorFile
-    ? fromCsv(readFileSync(join(rel(job, job.sink.dir), 'snapshots', priorFile), 'utf8'))
-    : [];
   // Snapshots are labelled with the date they were taken; the restatement check
   // needs that, not today's date, to know which days were already settled then.
-  const priorAsOf = priorFile ? priorFile.replace(/\.csv$/, '') : null;
+  const snaps = await sink.snapshotLabels();
+  const priorAsOf = snaps.length > 1 ? snaps[snaps.length - 2] : null;
+  const prior = priorAsOf ? await sink.readSnapshot(priorAsOf) : [];
 
   let knownKeys = job.verify.knownKeys || [];
   if (job.verify.entityCsv && existsSync(rel(job, job.verify.entityCsv))) {
@@ -93,7 +92,7 @@ function doVerify(job, { asOf } = {}) {
 
   const config = { ...job.verify, priorSnapshot: prior, priorAsOf, knownKeys, asOf: asOf || job.verify.asOf };
   const out = runChecks({ sheet, truth, config, enabled: job.verify.checks });
-  return { ...out, counts: { sheet: sheet.length, truth: truth.length, snapshots: snaps.length }, config };
+  return { ...out, counts: { sheet: sheet.length, truth: truth.length, snapshots: snaps.length }, config, destination: sink.url };
 }
 
 function printVerify(v) {
@@ -152,7 +151,7 @@ async function doDemo() {
   const ads = [...new Set(buildLedger({}).rows.map((r) => r.ad_name))];
   writeFileSync(rel(job, job.verify.entityCsv), 'ad_name\n' + ads.join('\n') + '\n', 'utf8');
 
-  const v = doVerify(job, { asOf: '2026-08-14' });
+  const v = await doVerify(job, { asOf: '2026-08-14' });
   const code = printVerify(v);
 
   const html = renderReport({ job, verify: v, faults, receipts: lastSync.receipts.entries() });
@@ -190,12 +189,23 @@ const main = async () => {
       break;
     }
     case 'verify': {
-      process.exitCode = printVerify(doVerify(loadJob(argv[1]), { asOf: flag('as-of') }));
+      process.exitCode = printVerify(await doVerify(loadJob(argv[1]), { asOf: flag('as-of') }));
+      break;
+    }
+    case 'sheets:init': {
+      const out = await createSpreadsheet({
+        credentialsPath: String(flag('credentials', '.secrets/google-service-account.json')),
+        title: String(flag('title', 'syncproof — verified report')),
+        shareWith: flag('share') === true ? null : flag('share'),
+      });
+      console.log(`spreadsheet created\n  id     ${out.id}\n  url    ${out.url}\n  owner  ${out.owner}`
+        + (out.sharedWith ? `\n  shared ${out.sharedWith} (editor)` : ''));
+      console.log(`\nPut the id into your job file as sink.spreadsheetId.`);
       break;
     }
     case 'report': {
       const job = loadJob(argv[1]);
-      const v = doVerify(job, { asOf: flag('as-of') });
+      const v = await doVerify(job, { asOf: flag('as-of') });
       const out = String(flag('out', rel(job, 'out/report.html')));
       writeFileSync(out, renderReport({ job, verify: v, faults: [], receipts: [] }), 'utf8');
       console.log(`report → ${out}`);

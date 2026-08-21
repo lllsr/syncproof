@@ -153,11 +153,39 @@ anything. Keep the scenario you have; add a verification step to it:
 
 ---
 
-## What it does not do
+## Writing to a real Google Sheet
 
-No Google Sheets writer yet — the destination is a local CSV workbook implementing the
-contract the Sheets sink will use (upsert, retain, snapshot). Swapping it in is one
-module; claiming it works before it does would be the exact failure this tool is about.
+Two destinations exist and both go through the same merge rules, so testing against one
+and shipping the other proves something:
+
+| `sink.type` | Destination |
+|---|---|
+| `local` | a CSV workbook on disk — what the demo and the tests use |
+| `sheets` | a Google Sheet: `current` tab plus one `snapshot <label>` tab per run |
+
+Setup is deliberately narrow. Create a service account, give it **no project roles at
+all**, and share the one spreadsheet with its address as an Editor. The credential can
+then reach exactly one sheet and nothing else in the project.
+
+```jsonc
+"sink": {
+  "type": "sheets",
+  "credentialsPath": ".secrets/google-service-account.json",
+  "spreadsheetId": "1buM…",
+  "tab": "current",
+  "snapshotPrefix": "snapshot ",
+  "keyColumns": ["date", "ad_name"],
+  "columns": ["date", "ad_name", "impressions", "link_clicks", "purchases", "spend", "revenue"]
+}
+```
+
+Auth is a service-account JWT signed with `node:crypto` — still no dependencies. If a
+403 comes back, the error says which address to share the sheet with.
+
+If your network only allows outbound through a SOCKS5 proxy, set `SYNCPROOF_SOCKS5`
+(e.g. `127.0.0.1:7890`). Unset, that code path is inert.
+
+## What it does not do
 
 No connector library. `source` speaks paginated JSON with a cursor, which covers a large
 share of reporting APIs, but a platform with an unusual auth or export flow needs a small
@@ -170,7 +198,7 @@ catch are the point.
 ## Install and test
 
 ```bash
-npm test        # 24 tests, standard library only, no network
+npm test        # 28 tests, standard library only, no network
 ```
 
 Node 20+. No dependencies.

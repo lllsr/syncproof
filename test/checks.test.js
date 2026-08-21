@@ -122,7 +122,7 @@ test('the verdict is driven by failures, not by warnings', () => {
 const wbDir = () => mkdtempSync(join(tmpdir(), 'syncproof-'));
 
 test('upsert is idempotent: writing the same rows twice changes nothing', () => {
-  const wb = new LocalWorkbook(wbDir(), { columns: ['date', 'ad_name', 'spend'], keyColumns });
+  const wb = new LocalWorkbook({ dir: wbDir(), columns: ['date', 'ad_name', 'spend'], keyColumns });
   wb.commit(truth, { snapshotLabel: 'a' });
   const first = wb.readCurrent().length;
   wb.commit(truth, { snapshotLabel: 'b' });
@@ -130,7 +130,7 @@ test('upsert is idempotent: writing the same rows twice changes nothing', () => 
 });
 
 test('rows the source stops returning are retained, never deleted', () => {
-  const wb = new LocalWorkbook(wbDir(), { columns: ['date', 'ad_name', 'spend'], keyColumns });
+  const wb = new LocalWorkbook({ dir: wbDir(), columns: ['date', 'ad_name', 'spend'], keyColumns });
   wb.commit(truth, { snapshotLabel: 'a' });
   const plan = wb.plan([truth[0]]);
   assert.equal(plan.retained, 2);
@@ -139,7 +139,7 @@ test('rows the source stops returning are retained, never deleted', () => {
 });
 
 test('a plan reports only the cells that would change', () => {
-  const wb = new LocalWorkbook(wbDir(), { columns: ['date', 'ad_name', 'spend'], keyColumns });
+  const wb = new LocalWorkbook({ dir: wbDir(), columns: ['date', 'ad_name', 'spend'], keyColumns });
   wb.commit(truth, { snapshotLabel: 'a' });
   const plan = wb.plan([{ ...truth[0], spend: 111 }]);
   assert.equal(plan.revised, 1);
@@ -228,4 +228,39 @@ test('receipts are append-only', () => {
   const lines = readFileSync(p, 'utf8').trim().split('\n');
   assert.equal(lines.length, 4, 'two run_started plus two notes');
   assert.equal(a.entries('aaa').length, 2);
+});
+
+// ------------------------------------------------------------------ sheets shapes
+// The Sheets sink itself needs the network; its value marshalling does not, and
+// that is where the bugs were (a range mismatch and blank trailing rows).
+
+import { RANGE, toValues, fromValues } from '../src/sink/sheets.js';
+import { planMerge, mergeRows } from '../src/sink/merge.js';
+
+test('the A1 range quotes tab names containing apostrophes', () => {
+  assert.equal(RANGE("Bob's tab"), "'Bob''s tab'!A1:ZZZ200000");
+});
+
+test('values round-trip through the sheet representation', () => {
+  const cols = ['date', 'ad_name', 'spend'];
+  const values = toValues(truth, cols);
+  assert.deepEqual(values[0], cols, 'first row is the header');
+  const back = fromValues(values, cols);
+  assert.equal(back.length, 3);
+  assert.equal(back[0].ad_name, '#1.1');
+});
+
+test('trailing blank rows in a sheet are not read as data', () => {
+  const values = [['date', 'ad_name'], ['2026-07-01', '#1.1'], ['', ''], ['', '']];
+  assert.equal(fromValues(values, ['date', 'ad_name']).length, 1);
+});
+
+test('both sinks share one merge implementation', () => {
+  // A guard against the two destinations drifting apart: same inputs, same plan.
+  const cfg = { columns: ['date', 'ad_name', 'spend'], keyColumns };
+  const plan = planMerge(truth, [{ ...truth[0], spend: 5 }], cfg);
+  assert.equal(plan.revised, 1);
+  assert.equal(plan.retained, 2);
+  const rows = mergeRows(truth, [{ ...truth[0], spend: 5 }], { keyColumns });
+  assert.equal(rows.length, 3, 'a shorter incoming set must not shrink the sheet');
 });
