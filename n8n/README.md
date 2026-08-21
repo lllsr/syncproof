@@ -3,52 +3,75 @@
 Two importable workflows. Neither needs any credentials configured, so they run
 immediately after import.
 
-| File | What it does | Where it runs |
-|---|---|---|
-| `01-sync-then-verify.json` | Sync, then refuse to pass the data on unless it matches the export | anywhere, including n8n Cloud (HTTP only) |
-| `02-verify-someone-elses-pipeline.json` | Only verify — for a sheet some other pipeline already builds | self-hosted (Execute Command node) |
+| File | What it does |
+|---|---|
+| `01-sync-then-verify.json` | Sync, then refuse to pass the data on unless it matches the export |
+| `02-verify-someone-elses-pipeline.json` | Only verify — for a sheet some other pipeline already builds |
 
-## Import
+Both talk to syncproof over HTTP, so both work on self-hosted n8n and on n8n Cloud.
 
-**Workflows → ⋯ → Import from File**, pick the JSON. Then:
-
-1. Start the API next to your data:
-   ```bash
-   syncproof serve --port 8790          # add --token X in anything but a local test
-   ```
-2. Start the bundled simulator if you are trying this without a real platform yet:
-   ```bash
-   syncproof simulate --port 8811
-   ```
-3. Edit the `job` query parameter in each HTTP node to point at your own job file.
-
-Run it once by hand before scheduling it. The interesting run is the failing one:
+## Run them
 
 ```bash
-syncproof demo --faults micros      # leaves a sheet that disagrees with the export
+syncproof serve    --port 8790            # the API the workflows call
+syncproof simulate --port 8787            # stand-in source, matching jobs/ads-to-sheet.json
+syncproof demo     --clean                # give the sheet a clean starting state
 ```
 
-Execute the workflow again — the IF node now takes its second branch.
+Import each file via **Workflows → ⋯ → Import from File**, then press **Execute
+workflow**. Both start with a manual trigger next to the schedule, so they can be run
+by hand or headlessly:
 
-## Two things worth copying into your own scenarios
+```bash
+n8n execute --id syncproof0000001
+```
 
-**Never Error + Full Response.** In the HTTP Request node's options, both must be on.
-Without them a 422 aborts the run instead of arriving at your IF node as data, and you
-lose the ability to react to a failed check at all.
+The interesting run is the failing one. Restart the simulator with a fault and execute
+again:
 
-**Branch on `statusCode`, not on a body field.** `POST /verify` answers 200 when the
-sheet matches the export and 422 when it does not. That is deliberate: a status code is
-hard to ignore, and a boolean buried in a response body is easy to ignore.
+```bash
+syncproof simulate --port 8787 --faults micros
+```
+
+`01` now stops at **Stop: do not report from this**, and the error message carries the
+diagnosis — *"423 cell(s) disagree — every one in spend, each exactly 1000000× the
+export"*. `02` takes its alert branch with the same detail in the payload.
+
+## Four things learned building these
+
+**Never Error + Full Response on the verify node.** Both must be on. Without them a 422
+aborts the run instead of arriving at the IF node as data, and you lose the ability to
+react to a failed check at all.
+
+**Do NOT set Never Error on the sync node.** A failed sync has to stop the run. The first
+version of `01` had it on both nodes, and the workflow went green while the sync was
+failing — the sheet was simply stale, and stale data still matched the stale export.
+A green run that proves nothing is worse than a red one.
+
+**Branch on `statusCode`, not on a body field.** `POST /verify` answers 200 when the sheet
+matches and 422 when it does not. A status code is hard to ignore; a boolean buried in a
+response body is easy to ignore.
+
+**The Execute Command node is not a usable integration path.** Two reasons, both
+measured, not assumed:
+
+- n8n 2.x **disables it by default** for security, along with `localFileTrigger`. Re-enabling
+  needs `NODES_EXCLUDE=[]` on the server — a change a client's ops team may well refuse.
+  (`NODES_INCLUDE` is not the flag: it is an instance-wide allowlist, and setting it to just
+  that one node leaves every other node unavailable.)
+- Once enabled, it returned **empty `stdout`** on this build even for
+  `node -e "console.log(...)"`. It reports `exitCode: 0` and no output, so a command's
+  result cannot be read. And with `onError: continueRegularOutput` set, a non-zero exit
+  replaces the output entirely with `{ error: "Command failed with exit code 1" }`.
+
+So the HTTP surface is the integration, not the fallback. If you do want to shell out from
+somewhere else — cron, CI, a Make.com self-hosted agent — `syncproof verify` supports
+`--cwd` (paths in a job file resolve against the working directory, and `cd X && …` differs
+between `cmd.exe` and `sh`) and `--exit-zero` (put the verdict in the JSON body instead of
+the exit status).
 
 ## Where the alert goes
 
 `02` ends in a Code node that only logs. Replace it with Slack, Gmail, Linear — whatever
-the team already reads. It is left as a Code node so the workflow imports and runs
-without asking you to connect an account first.
-
-## On n8n Cloud, Make and Zapier
-
-None of them can run a shell command, so `02`'s Execute Command node will not work there.
-Use the HTTP pattern from `01` instead: the API has to be reachable from the platform,
-which means either running it on a box with a public address or putting a tunnel in front
-of it. Keep `--token` set if you do.
+the team already reads. It is left as a Code node so the workflow imports and runs without
+asking you to connect an account first.

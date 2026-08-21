@@ -13,10 +13,12 @@ syncproof — sync a reporting API into a sheet, then prove the sheet matches it
       Read the source, print exactly what would change, and write only with
       --approve. Without it nothing is modified.
 
-  syncproof verify <job.json> [--as-of DATE] [--json]
+  syncproof verify <job.json> [--as-of DATE] [--json] [--exit-zero] [--cwd DIR]
       Compare the sheet against the client's own export. Exit code 1 if any
       check fails, so it can gate a scheduled run. --json prints a machine
-      summary for an n8n Execute Command node.
+      summary. --exit-zero keeps the exit status at 0 and leaves the verdict in
+      the body, for callers that discard output on failure. --cwd sets the
+      directory the job file's relative paths resolve against.
 
   syncproof serve [--port 8790] [--token X] [--job jobs/x.json]
       HTTP surface for platforms that cannot run shell commands (n8n Cloud,

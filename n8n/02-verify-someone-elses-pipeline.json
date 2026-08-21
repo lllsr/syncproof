@@ -1,6 +1,16 @@
 {
+  "id": "syncproof0000002",
   "name": "syncproof — check a sheet somebody else's pipeline builds",
   "nodes": [
+    {
+      "parameters": {},
+      "id": "b2000000-0000-4000-8000-000000000099",
+      "name": "When clicking 'Execute workflow'",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [-560, 160],
+      "notes": "Lets the workflow be run by hand or headlessly (n8n execute --id ...) as well as on the schedule."
+    },
     {
       "parameters": {
         "rule": { "interval": [{ "field": "hours", "hoursInterval": 6 }] }
@@ -9,28 +19,32 @@
       "name": "Every 6 hours",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [-320, 0]
+      "position": [-560, -40]
     },
     {
       "parameters": {
-        "command": "node C:/Users/Liangliang.Li/sidebiz/syncproof/src/cli.js verify jobs/ads-to-sheet.json --json"
+        "method": "POST",
+        "url": "http://127.0.0.1:8790/verify",
+        "sendQuery": true,
+        "queryParameters": { "parameters": [{ "name": "job", "value": "jobs/ads-to-sheet.json" }] },
+        "options": { "response": { "response": { "fullResponse": true, "neverError": true } } }
       },
       "id": "b2000000-0000-4000-8000-000000000002",
-      "name": "syncproof verify (Execute Command)",
-      "type": "n8n-nodes-base.executeCommand",
-      "typeVersion": 1,
-      "position": [-80, 0],
-      "notes": "Self-hosted n8n only. Exit code 1 on failure; stdout is the JSON summary. On n8n Cloud or Make, call POST /verify instead and branch on the 422."
+      "name": "Ask syncproof to verify",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-260, 60],
+      "notes": "HTTP rather than an Execute Command node, deliberately. In n8n 2.x that node is disabled by default, and once enabled it returned empty stdout on this build — a command's output cannot be read reliably. HTTP works the same on self-hosted and Cloud."
     },
     {
       "parameters": {
-        "jsCode": "// Turn the command output into fields a human can read in the run log.\nconst raw = $input.first().json;\nlet summary = {};\ntry { summary = JSON.parse(raw.stdout || '{}'); } catch (e) { summary = { parseError: String(e), stdout: raw.stdout }; }\nconst failed = (summary.checks || []).filter(c => c.status === 'fail');\nreturn [{ json: {\n  trustworthy: summary.trustworthy === true,\n  verdict: summary.verdict || 'UNKNOWN',\n  exitCode: raw.exitCode,\n  destination: summary.destination,\n  rowsInSheet: summary.counts?.sheet ?? null,\n  rowsInExport: summary.counts?.truth ?? null,\n  failures: failed.map(c => `${c.id}: ${c.headline}`),\n} }];"
+        "jsCode": "// Flatten the response into fields that read well in the execution log and in\n// whatever alert channel this ends up feeding.\nconst res = $input.first().json;\nconst body = res.body || {};\nconst failed = (body.checks || []).filter(c => c.status === 'fail');\nreturn [{ json: {\n  trustworthy: res.statusCode === 200,\n  statusCode: res.statusCode,\n  verdict: body.verdict || 'UNKNOWN',\n  destination: body.destination || null,\n  rowsInSheet: body.counts?.sheet ?? null,\n  rowsInExport: body.counts?.truth ?? null,\n  failures: failed.map(c => `${c.id}: ${c.headline}`),\n} }];"
       },
       "id": "b2000000-0000-4000-8000-000000000003",
       "name": "Read the verdict",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [160, 0]
+      "position": [0, 60]
     },
     {
       "parameters": {
@@ -39,9 +53,9 @@
           "conditions": [
             {
               "id": "cond-ok",
-              "leftValue": "={{ $json.trustworthy }}",
-              "rightValue": "true",
-              "operator": { "type": "boolean", "operation": "true", "singleValue": true }
+              "leftValue": "={{ $json.statusCode }}",
+              "rightValue": 200,
+              "operator": { "type": "number", "operation": "equals" }
             }
           ],
           "combinator": "and"
@@ -53,7 +67,8 @@
       "name": "Trustworthy?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
-      "position": [400, 0]
+      "position": [240, 60],
+      "notes": "200 = the sheet matches the export. 422 = it does not."
     },
     {
       "parameters": {},
@@ -61,22 +76,23 @@
       "name": "Nothing to do",
       "type": "n8n-nodes-base.noOp",
       "typeVersion": 1,
-      "position": [640, -100]
+      "position": [480, -40]
     },
     {
       "parameters": {
-        "jsCode": "// Where a Slack, email or ticket node goes. Kept as code so this workflow\n// imports and runs without any credentials configured.\nconst j = $input.first().json;\nconsole.log('ALERT — ' + j.verdict);\nfor (const f of j.failures) console.log('  · ' + f);\nreturn [{ json: { alerted: true, ...j } }];"
+        "jsCode": "// Where a Slack, email or ticket node goes. Kept as code so this workflow\n// imports and runs without any credentials configured.\nconst j = $input.first().json;\nconsole.log(`ALERT — ${j.verdict} (HTTP ${j.statusCode})`);\nconsole.log(`  sheet ${j.rowsInSheet} rows vs export ${j.rowsInExport} rows`);\nfor (const f of j.failures) console.log(`  · ${f}`);\nreturn [{ json: { alerted: true, ...j } }];"
       },
       "id": "b2000000-0000-4000-8000-000000000006",
       "name": "Alert the owner (put Slack here)",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [640, 100]
+      "position": [480, 160]
     }
   ],
   "connections": {
-    "Every 6 hours": { "main": [[{ "node": "syncproof verify (Execute Command)", "type": "main", "index": 0 }]] },
-    "syncproof verify (Execute Command)": { "main": [[{ "node": "Read the verdict", "type": "main", "index": 0 }]] },
+    "When clicking 'Execute workflow'": { "main": [[{ "node": "Ask syncproof to verify", "type": "main", "index": 0 }]] },
+    "Every 6 hours": { "main": [[{ "node": "Ask syncproof to verify", "type": "main", "index": 0 }]] },
+    "Ask syncproof to verify": { "main": [[{ "node": "Read the verdict", "type": "main", "index": 0 }]] },
     "Read the verdict": { "main": [[{ "node": "Trustworthy?", "type": "main", "index": 0 }]] },
     "Trustworthy?": {
       "main": [

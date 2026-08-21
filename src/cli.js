@@ -22,6 +22,12 @@ const flag = (name, dflt = null) => {
   return next && !next.startsWith('--') ? next : true;
 };
 
+// Paths in a job file resolve against the working directory. --cwd sets it
+// explicitly, so a scheduler or an n8n Execute Command node does not need shell
+// tricks like `cd X && ...`, which differ between cmd.exe and sh.
+const cwd = flag('cwd');
+if (cwd && cwd !== true) process.chdir(String(cwd));
+
 const C = { dim: '\x1b[2m', red: '\x1b[31m', green: '\x1b[32m', yellow: '\x1b[33m', bold: '\x1b[1m', off: '\x1b[0m' };
 const mark = (s) => (s === 'pass' ? `${C.green}✓${C.off}` : s === 'fail' ? `${C.red}✗${C.off}` : `${C.yellow}!${C.off}`);
 
@@ -145,7 +151,10 @@ const main = async () => {
       const v = await doVerify(job, { asOf: flag('as-of') });
       if (flag('json')) {
         console.log(JSON.stringify(summarise(job, v), null, 2));
-        process.exitCode = v.failed ? 1 : 0;
+        // --exit-zero exists for n8n's Execute Command node, which discards stdout
+        // when the command exits non-zero. The verdict then travels in the body,
+        // which is where a workflow can actually read it.
+        process.exitCode = flag('exit-zero') ? 0 : (v.failed ? 1 : 0);
       } else {
         process.exitCode = printVerify(v);
       }

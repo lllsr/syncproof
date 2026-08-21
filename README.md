@@ -144,14 +144,8 @@ syncproof report jobs/ads.json --out report.html
 This does not replace your workflow platform and does not ask you to move anything.
 Keep the scenario you have; put a verification step in front of the decisions it feeds.
 
-**Self-hosted n8n** — an Execute Command node:
-
-```bash
-syncproof verify jobs/ads.json --json     # exit 1 on failure, JSON summary on stdout
-```
-
-**n8n Cloud, Make, Zapier** — they cannot run shell commands, so run the HTTP surface
-next to your data instead:
+Run the API next to your data and put a verification step in front of the decisions
+your scenario feeds:
 
 ```bash
 syncproof serve --port 8790 --token "$SYNCPROOF_TOKEN"
@@ -166,10 +160,14 @@ syncproof serve --port 8790 --token "$SYNCPROOF_TOKEN"
 A failed check is **422, not 200 with a flag in the body** — no-code platforms branch on
 status codes, and a flag in a body gets ignored. An ignored check is not a check.
 
-In an n8n HTTP Request node, set **Never Error** and **Full Response** so a 422 arrives
-at your IF node as data instead of killing the run. Two importable workflows are in
-[`n8n/`](n8n/): one that syncs then verifies, and one that only verifies — for a sheet
-some other pipeline already builds.
+In an n8n HTTP Request node, set **Never Error** and **Full Response** on the *verify*
+node so a 422 arrives at your IF node as data. Do not set them on the sync node: a failed
+sync must stop the run, or the workflow goes green while the sheet quietly goes stale.
+
+HTTP is the integration path, including on self-hosted. n8n's Execute Command node is
+disabled by default in 2.x and returned empty stdout on the build I tested — the details,
+and the `--cwd` / `--exit-zero` flags for shelling out from cron or CI instead, are in
+[`n8n/README.md`](n8n/README.md), along with two importable workflows.
 
 The receipts file is append-only JSONL, so whatever already watches your logs can read it.
 
