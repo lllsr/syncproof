@@ -4,7 +4,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
-import { readAll, normalise } from './source/api.js';
+import { readAll, normalise, flatten } from './source/api.js';
 import { fromCsv } from './sink/workbook.js';
 import { openSink } from './sink/index.js';
 import { Receipts, gate } from './receipts.js';
@@ -33,7 +33,7 @@ export async function doSync(job, { approve = false, snapshotLabel, asOf } = {})
     rows: read.rows.length, pages: read.pages, retries: read.retriesUsed, totalHint: read.totalHint,
   });
 
-  const rows = normalise(read.rows, job.source.transforms);
+  const rows = normalise(flatten(read.rows, job.source.flattenFields), job.source.transforms);
   const sink = openSink(job.sink);
   const plan = await sink.plan(rows);
   receipts.note('write_planned', { destination: sink.url, ...plan });

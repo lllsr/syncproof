@@ -296,3 +296,23 @@ test('the page-size parameter name is configurable', async () => {
   await readAll({ url: 'http://x/v1', pageSize: 77, pageSizeParam: 'per_page', fetchImpl });
   assert.equal(seen, '77');
 });
+
+test('restatement honours the configured date column, not a hardcoded one', () => {
+  // A CRM row dates itself with closedate. Reading row.date would give NaN and
+  // silently classify a real edit as normal in-window movement.
+  const prior = [{ id: '1', closedate: '2026-07-01', amount: 100 }];
+  const now = [{ id: '1', closedate: '2026-07-01', amount: 160 }];
+  const cfg = { priorSnapshot: prior, priorAsOf: '2026-07-20', keyColumns: ['id'], metrics: ['amount'], settledAfterDays: 3 };
+  assert.equal(restatementReport(now, null, { ...cfg, dateColumn: 'closedate' }).status, 'fail');
+  // Without the right column the row cannot be dated — still reported, never silent.
+  assert.equal(restatementReport(now, null, cfg).status, 'fail');
+});
+
+test('an undated record that changes is reported rather than ignored', () => {
+  const prior = [{ id: '1', amount: 100 }];
+  const now = [{ id: '1', amount: 900 }];
+  const r = restatementReport(now, null, {
+    priorSnapshot: prior, priorAsOf: '2026-07-20', keyColumns: ['id'], metrics: ['amount'], settledAfterDays: 3,
+  });
+  assert.equal(r.status, 'fail');
+});

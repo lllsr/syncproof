@@ -6,6 +6,7 @@
 
 import { createServer } from 'node:http';
 import { buildLedger, applyRestatement } from './ledger.js';
+import { buildDeals, dealsAsOf, crmPage, CRM_FAULTS } from './crm.js';
 
 export const FAULTS = {
   micros: 'spend is returned in micros (1e6) while the export is in currency units',
@@ -16,6 +17,7 @@ export const FAULTS = {
   dupe_page: 'a retried page returns rows that were already delivered',
   window_change: 'the attribution window changes mid-period, restating older days',
   missed_run: 'one date returns no rows at all, as if a scheduled run had failed that night',
+  ...CRM_FAULTS,
 };
 
 /** The date the `missed_run` fault blanks out. */
@@ -86,8 +88,20 @@ export function createSimulator({ seed = 42, faults = [], asOf = '2026-08-14', p
     };
   }
 
+  const deals = buildDeals({ seed });
+  /** The CRM endpoint. `revision` advances with asOf, so an edit can appear later. */
+  const crm = ({ after, limit }) => {
+    requestCount++;
+    if (on('rate_limit') && requestCount % 4 === 0) {
+      return { status: 429, headers: { 'retry-after': '2' }, body: { error: 'rate limit exceeded' } };
+    }
+    const revision = currentAsOf >= '2026-08-14' ? 1 : 0;
+    const all = dealsAsOf(deals, { faults, revision });
+    return { status: 200, headers: {}, body: crmPage(all, { after, limit, faults }) };
+  };
+
   return {
-    page, ledger, faults,
+    page, crm, deals, ledger, faults,
     get asOf() { return currentAsOf; },
     /** Advance the clock between runs, as a scheduled sync would experience it. */
     setAsOf(d) { currentAsOf = d; requestCount = 0; },
@@ -100,6 +114,11 @@ export function serve(sim, port = 8787) {
     if (url.pathname === '/healthz') {
       res.writeHead(200, { 'content-type': 'application/json' });
       return res.end(JSON.stringify({ ok: true, faults: sim.faults, asOf: sim.asOf }));
+    }
+    if (url.pathname === '/crm/v3/objects/deals') {
+      const out = sim.crm({ after: url.searchParams.get('after') || '0', limit: url.searchParams.get('limit') || 100 });
+      res.writeHead(out.status, { 'content-type': 'application/json', ...out.headers });
+      return res.end(JSON.stringify(out.body));
     }
     if (url.pathname !== '/v1/ads') {
       res.writeHead(404, { 'content-type': 'application/json' });

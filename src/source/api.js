@@ -66,6 +66,24 @@ export async function readAll({ url, params = {}, auth, cursorParam = 'cursor', 
   }
 }
 
+/**
+ * Lift nested objects onto the row. CRMs return their fields one level down
+ * (HubSpot puts everything in `properties`), and a spreadsheet wants columns.
+ * Declared in the job file so the shape of the source stays documented.
+ */
+export function flatten(rows, fields = []) {
+  if (!fields.length) return rows;
+  return rows.map((row) => {
+    const out = { ...row };
+    for (const f of fields) {
+      const nested = at(row, f);
+      if (nested && typeof nested === 'object') Object.assign(out, nested);
+      delete out[String(f).split('.')[0]];
+    }
+    return out;
+  });
+}
+
 /** Apply declared per-field transforms from the job spec, e.g. micros -> currency. */
 export function normalise(rows, transforms = {}) {
   const keys = Object.keys(transforms);

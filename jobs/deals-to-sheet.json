@@ -1,0 +1,38 @@
+{
+  "name": "CRM deals → reporting sheet (verified)",
+  "receipts": "out/receipts-crm.jsonl",
+  "demo": { "shape": "crm" },
+
+  "source": {
+    "//": "HubSpot's shape: rows under results, cursor nested at paging.next.after, fields one level down in properties.",
+    "url": "http://127.0.0.1:8811/crm/v3/objects/deals",
+    "dataField": "results",
+    "cursorField": "paging.next.after",
+    "cursorParam": "after",
+    "pageSizeParam": "limit",
+    "totalField": "total",
+    "pageSize": 100,
+    "flattenFields": ["properties"],
+    "transforms": {}
+  },
+
+  "sink": {
+    "dir": "out/crm-sheet",
+    "keyColumns": ["id"],
+    "columns": ["id", "dealname", "amount", "dealstage", "pipeline", "hubspot_owner_id", "createdate", "closedate"]
+  },
+
+  "truth": { "csv": "out/crm-export.csv" },
+
+  "verify": {
+    "//checks": "date_continuity is deliberately absent: gaps in close dates are normal in a pipeline, and a check that fires on normal behaviour gets switched off.",
+    "checks": ["key_coverage", "aggregate_tolerance", "row_level_diff", "unique_keys", "history_preserved", "restatement", "join_integrity"],
+    "keyColumns": ["id"],
+    "metrics": ["amount"],
+    "tolerancePct": 0.5,
+    "dateColumn": "closedate",
+    "joinColumn": "dealstage",
+    "knownKeys": ["appointmentscheduled", "qualifiedtobuy", "presentationscheduled", "contractsent", "closedwon", "closedlost"],
+    "settledAfterDays": 0
+  }
+}

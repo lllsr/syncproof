@@ -7,6 +7,7 @@ import { join, dirname } from 'node:path';
 
 import { createSimulator, serve as serveSim, FAULTS } from './sim/server.js';
 import { buildLedger, applyRestatement, exportRows, toCsv as ledgerCsv, EXPORT_COLUMNS } from './sim/ledger.js';
+import { buildDeals, dealsAsOf, DEAL_COLUMNS } from './sim/crm.js';
 import { createSpreadsheet } from './sink/sheets.js';
 import { loadJob, rel, doSync, doVerify, summarise } from './run.js';
 import { renderReport } from './verify/report.js';
@@ -41,6 +42,7 @@ async function doDemo() {
   const port = Number(flag('port', 8811));
   const jobPath = String(flag('job', join(dirname(new URL(import.meta.url).pathname.slice(1)), '..', 'jobs', 'ads-to-sheet.json')));
   const job = loadJob(jobPath);
+  const shape = job.demo?.shape || 'ads';
   mkdirSync(rel('out'), { recursive: true });
 
   console.log(`${C.bold}syncproof demo${C.off}  ${C.dim}faults: ${faults.length ? faults.join(', ') : 'none'}${C.off}`);
@@ -55,10 +57,20 @@ async function doDemo() {
     for (const asOf of runs) {
       sim.setAsOf(asOf);
       // The client's own export, taken at the same moment — this is the source of truth.
-      writeFileSync(rel(job.truth.csv), ledgerCsv(exportRows(applyRestatement(buildLedger({}).rows, asOf)), EXPORT_COLUMNS), 'utf8');
+      // Derived from the simulator's own records, never rebuilt from scratch: a
+      // second construction is a second source of truth, and the first version of
+      // this demo used a different seed for each — which the row-level check caught.
+      if (shape === 'crm') {
+        const revision = asOf >= '2026-08-14' ? 1 : 0;
+        writeFileSync(rel(job.truth.csv), ledgerCsv(dealsAsOf(sim.deals, { faults: [], revision }), DEAL_COLUMNS), 'utf8');
+      } else {
+        writeFileSync(rel(job.truth.csv), ledgerCsv(exportRows(applyRestatement(sim.ledger.rows, asOf)), EXPORT_COLUMNS), 'utf8');
+      }
 
       const jobRun = structuredClone({ ...job, __path: undefined, __dir: undefined });
-      jobRun.source.url = `http://127.0.0.1:${port}/v1/ads`;
+      jobRun.source.url = shape === 'crm'
+        ? `http://127.0.0.1:${port}/crm/v3/objects/deals`
+        : `http://127.0.0.1:${port}/v1/ads`;
       if (flag('naive')) jobRun.sink.mode = 'append';        // emulate an "add row" automation
       // A rolling window introduced on the second run is the realistic version of
       // this failure: the sheet was complete, then someone "tidied it up".
@@ -73,9 +85,12 @@ async function doDemo() {
     await new Promise((f) => server.close(f));
   }
 
-  // The entity list the client maintains by hand (their roadmap tab).
-  const ads = [...new Set(buildLedger({}).rows.map((r) => r.ad_name))];
-  writeFileSync(rel(job.verify.entityCsv), 'ad_name\n' + ads.join('\n') + '\n', 'utf8');
+  if (job.verify.entityCsv) {
+    // The entity list the client maintains by hand — their roadmap tab. The CRM
+    // shape lists its stages inline instead, so this only applies to the ads job.
+    const ads = [...new Set(sim.ledger.rows.map((r) => r.ad_name))];
+    writeFileSync(rel(job.verify.entityCsv), 'ad_name\n' + ads.join('\n') + '\n', 'utf8');
+  }
 
   const v = await doVerify(job, { asOf: '2026-08-14' });
   const code = printVerify(v);

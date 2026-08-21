@@ -170,7 +170,7 @@ export function historyPreserved(sheet, _truth, { priorSnapshot, keyColumns }) {
  * Restatement is surfaced rather than hidden: values that changed for settled days
  * are reported, so a human decides whether that is attribution or a bug.
  */
-export function restatementReport(sheet, _truth, { priorSnapshot, priorAsOf, keyColumns, metrics, settledAfterDays = 3, asOf }) {
+export function restatementReport(sheet, _truth, { priorSnapshot, priorAsOf, keyColumns, metrics, settledAfterDays = 3, asOf, dateColumn = 'date' }) {
   if (!priorSnapshot?.length) {
     return { id: 'restatement', status: 'warn', headline: 'no earlier snapshot to compare against yet', detail: '', evidence: {} };
   }
@@ -184,7 +184,10 @@ export function restatementReport(sheet, _truth, { priorSnapshot, priorAsOf, key
   for (const row of sheet) {
     const before = prev.get(keyOf(row, keyColumns));
     if (!before) continue;
-    const ageDays = (refMs - new Date(row.date + 'T00:00:00Z').getTime()) / 86400000;
+    // A record with no usable date is treated as settled. Silence would be the
+    // wrong default: an edit nobody can date is exactly the one worth surfacing.
+    const stamp = new Date(String(row[dateColumn] ?? '') + 'T00:00:00Z').getTime();
+    const ageDays = Number.isFinite(stamp) ? (refMs - stamp) / 86400000 : Infinity;
     for (const m of metrics) {
       if (num(before[m]) === num(row[m])) continue;
       const entry = { key: keyOf(row, keyColumns), metric: m, was: num(before[m]), now: num(row[m]), ageDays };
